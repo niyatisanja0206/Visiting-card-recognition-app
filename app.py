@@ -10,7 +10,6 @@ import pillow_heif
 
 pillow_heif.register_heif_opener()
 
-
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = 'upload_image'
@@ -195,7 +194,7 @@ def extract_information(image_paths):
     model = get_model()
     
     # Create extraction prompt
-    extraction_prompt = """Extract all the following information from this visiting card image(s). Return ONLY a valid JSON object with the following structure. Do not include any additional text, explanations, or markdown formatting - ONLY the JSON object.
+    prompt = """Extract all the following information from this visiting card image(s). Return ONLY a valid JSON object with the following structure. Do not include any additional text, explanations, or markdown formatting - ONLY the JSON object.
 
 {
   "company_name": ["company name 1 with its quote/subtitle", "company name 2 with its quote/subtitle"] or "single company name with quote/subtitle" or null,
@@ -229,9 +228,8 @@ Important:
 - Return ONLY the JSON object, nothing else"""
 
     # Prepare content for model
-    content = [extraction_prompt] + images
+    content = [prompt] + images
     
-    # Generate response
     response = model.generate_content(content)
     response_text = response.text.strip()
     
@@ -400,10 +398,4 @@ def upload_file():
         return jsonify({'error': str(e)}), 404
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-    except json.JSONDecodeError as e:
-        return jsonify({'error': f'Failed to parse response: {str(e)}'}), 500
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
