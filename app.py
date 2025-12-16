@@ -6,46 +6,134 @@ from PIL import Image
 import json
 import sys
 from llm_utils import get_model
+import pillow_heif
+
+pillow_heif.register_heif_opener()
+
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER'] = 'upload_image'
 
 # Create uploads directory if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Allowed file extensions
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'heic'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def merge_extracted_data(data1, data2):
+def merge_extracted_data(image1, image2):
     """
     Merge extracted data from two images, combining arrays and keeping non-null values.
     
     Args:
-        data1: First extracted data dict
-        data2: Second extracted data dict
+        image1: First extracted data dict
+        image2: Second extracted data dict
     
     Returns:
         dict: Merged extracted data
     """
     merged = {}
     
-    # Simple fields - prefer non-null, or data1 if both are non-null
-    simple_fields = ['company_name', 'person_name', 'address', 'website', 'category']
+    # Handle company names - normalize to arrays and merge them
+    company1 = image1.get('company_name')
+    company2 = image2.get('company_name')
+    quote1 = image1.get('company_quote')
+    quote2 = image2.get('company_quote')
+    
+    # Normalize company names to lists
+    companies1 = []
+    companies2 = []
+    
+    if company1:
+        if isinstance(company1, list):
+            companies1 = [str(c).strip() for c in company1 if c]
+        elif isinstance(company1, str):
+            companies1 = [company1.strip()]
+    
+    if company2:
+        if isinstance(company2, list):
+            companies2 = [str(c).strip() for c in company2 if c]
+        elif isinstance(company2, str):
+            companies2 = [company2.strip()]
+    
+    # Handle separate quotes (for backward compatibility)
+    if quote1 and companies1:
+        # Check if quote is already in the first company name
+        if quote1 not in companies1[0]:
+            companies1[0] = f"{companies1[0]}\n{quote1}".strip()
+    elif quote1 and not companies1:
+        companies1 = [quote1.strip()]
+    
+    if quote2 and companies2:
+        # Check if quote is already in the first company name
+        if quote2 not in companies2[0]:
+            companies2[0] = f"{companies2[0]}\n{quote2}".strip()
+    elif quote2 and not companies2:
+        companies2 = [quote2.strip()]
+    
+    # Combine both lists and remove duplicates
+    all_companies = companies1 + companies2
+    seen = set()
+    merged_companies = []
+    for company in all_companies:
+        # Use a normalized version (lowercase, stripped) for comparison
+        company_normalized = company.lower().strip()
+        if company_normalized and company_normalized not in seen:
+            seen.add(company_normalized)
+            merged_companies.append(company)
+    
+    merged['company_name'] = merged_companies if merged_companies else None
+    merged['company_quote'] = None  # Always set to None since it's merged into company_name
+    
+    # Handle person names - normalize to arrays and merge them
+    person1 = image1.get('person_name')
+    person2 = image2.get('person_name')
+    
+    # Normalize person names to lists
+    persons1 = []
+    persons2 = []
+    
+    if person1:
+        if isinstance(person1, list):
+            persons1 = [str(p).strip() for p in person1 if p]
+        elif isinstance(person1, str):
+            persons1 = [person1.strip()]
+    
+    if person2:
+        if isinstance(person2, list):
+            persons2 = [str(p).strip() for p in person2 if p]
+        elif isinstance(person2, str):
+            persons2 = [person2.strip()]
+    
+    # Combine both lists and remove duplicates
+    all_persons = persons1 + persons2
+    seen = set()
+    merged_persons = []
+    for person in all_persons:
+        # Use a normalized version (lowercase, stripped) for comparison
+        person_normalized = person.lower().strip()
+        if person_normalized and person_normalized not in seen:
+            seen.add(person_normalized)
+            merged_persons.append(person)
+    
+    merged['person_name'] = merged_persons if merged_persons else None
+    
+    # Simple fields - prefer non-null, or image1 if both are non-null
+    simple_fields = ['address', 'website', 'category']
     for field in simple_fields:
-        merged[field] = data1.get(field) or data2.get(field) or None
+        merged[field] = image1.get(field) or image2.get(field) or None
     
     # Array fields - combine and remove duplicates
     array_fields = ['contact_numbers', 'email_addresses', 'services']
     for field in array_fields:
         combined = []
-        if data1.get(field):
-            combined.extend(data1[field])
-        if data2.get(field):
-            combined.extend(data2[field])
+        if image1.get(field):
+            combined.extend(image1[field])
+        if image2.get(field):
+            combined.extend(image2[field])
         # Remove duplicates while preserving order
         seen = set()
         unique = []
@@ -56,8 +144,8 @@ def merge_extracted_data(data1, data2):
         merged[field] = unique if unique else None
     
     # Social media profiles - merge objects
-    social1 = data1.get('social_media_profiles', {}) or {}
-    social2 = data2.get('social_media_profiles', {}) or {}
+    social1 = image1.get('social_media_profiles', {}) or {}
+    social2 = image2.get('social_media_profiles', {}) or {}
     merged_social = {}
     
     # Merge individual platforms
@@ -110,8 +198,9 @@ def extract_information(image_paths):
     extraction_prompt = """Extract all the following information from this visiting card image(s). Return ONLY a valid JSON object with the following structure. Do not include any additional text, explanations, or markdown formatting - ONLY the JSON object.
 
 {
-  "company_name": "extracted company name or null",
-  "person_name": "extracted person name or null",
+  "company_name": ["company name 1 with its quote/subtitle", "company name 2 with its quote/subtitle"] or "single company name with quote/subtitle" or null,
+  "company_quote": null,
+  "person_name": ["person name 1", "person name 2"] or "single person name" or null,
   "contact_numbers": ["phone number 1", "phone number 2"],
   "social_media_profiles": {
     "facebook": "URL or null",
@@ -130,7 +219,11 @@ def extract_information(image_paths):
 
 Important:
 - If information is not available, use null (not empty string)
-- Extract all phone numbers, emails, and social media links you can find
+- Extract ALL phone numbers, emails, and social media links you can find - there is NO LIMIT on the number of items
+- For company_name: A visiting card can have ONE OR MORE (any number of) company names. Extract ALL company names found on the card. Return an array where each element is a string containing "Company Name\\nQuote/Subtitle" (combine the company name with its associated quote, tagline, subtitle, or slogan on the same line, separated by \\n). If there is only one company name, you can return either a string or an array with one element. ALWAYS include any quote, tagline, subtitle, or slogan that appears with each company name - combine them together in the format "Company Name\\nQuote". Extract EVERY company name you see, no matter how many there are.
+- For company_quote: Always set this to null (quotes are now included in company_name)
+- For person_name: A visiting card can have ONE OR MORE (any number of) person names. Extract ALL person names found on the card. Return an array where each element is a string containing the person's name. If there is only one person name, you can return either a string or an array with one element. Extract EVERY person name you see, no matter how many there are.
+- For social_media_profiles.other: Extract ALL social media URLs that don't fit into the standard platforms (facebook, instagram, linkedin, twitter, youtube). There can be N number of other social media profiles. Return an array with ALL other social media URLs found on the card.
 - For category, determine the business type based on the services/company name. 
 - No need to give to much specific category you can give general category like Healthcare, Technology, Education, Mechine-tools industries or others.
 - Return ONLY the JSON object, nothing else"""
@@ -152,6 +245,58 @@ Important:
     # Parse JSON
     try:
         extracted_data = json.loads(response_text)
+        
+        # Normalize company_name to always be an array
+        company_name = extracted_data.get('company_name')
+        company_quote = extracted_data.get('company_quote')
+        
+        company_names_list = []
+        
+        if company_name:
+            # If company_name is already an array
+            if isinstance(company_name, list):
+                company_names_list = [str(name).strip() for name in company_name if name]
+            # If company_name is a string
+            elif isinstance(company_name, str):
+                company_names_list = [company_name.strip()]
+            
+            # If there's a separate company_quote, combine it with the first company name
+            if company_quote and company_names_list:
+                # Check if quote is already in the company name
+                first_company = company_names_list[0]
+                if company_quote not in first_company:
+                    company_names_list[0] = f"{first_company}\n{company_quote}".strip()
+        elif company_quote:
+            # If only quote exists, use it as company name
+            company_names_list = [company_quote.strip()]
+        
+        # Set company_name as array (empty array if null, or None if empty)
+        if company_names_list:
+            extracted_data['company_name'] = company_names_list
+        else:
+            extracted_data['company_name'] = None
+        
+        # Always set company_quote to None since it's merged into company_name
+        extracted_data['company_quote'] = None
+        
+        # Normalize person_name to always be an array
+        person_name = extracted_data.get('person_name')
+        person_names_list = []
+        
+        if person_name:
+            # If person_name is already an array
+            if isinstance(person_name, list):
+                person_names_list = [str(name).strip() for name in person_name if name]
+            # If person_name is a string
+            elif isinstance(person_name, str):
+                person_names_list = [person_name.strip()]
+        
+        # Set person_name as array (empty array if null, or None if empty)
+        if person_names_list:
+            extracted_data['person_name'] = person_names_list
+        else:
+            extracted_data['person_name'] = None
+        
         return extracted_data
     except json.JSONDecodeError as e:
         print(f"Error: Failed to parse JSON response: {e}", file=sys.stderr)
@@ -197,18 +342,40 @@ def upload_file():
         
         # If two images, extract separately and compare company names
         if len(image_paths) == 2:
-            data1 = extract_information([image_paths[0]])
-            data2 = extract_information([image_paths[1]])
+            image1 = extract_information([image_paths[0]])
+            image2 = extract_information([image_paths[1]])
             
             # Compare company names
-            company1 = data1.get('company_name')
-            company2 = data2.get('company_name')
+            company1 = image1.get('company_name')
+            company2 = image2.get('company_name')
             
-            if company1 and company2 and company1.lower().strip() != company2.lower().strip():
-                warning_message = f"Warning: Two different company names were detected ('{company1}' and '{company2}'). It's possible you have uploaded cards for two different companies, not the front and back side of the same card. So you may have to extract the information from both the cards combined and the information given is not correct."
+            # Normalize to lists for comparison
+            companies1_list = []
+            companies2_list = []
+            
+            if company1:
+                if isinstance(company1, list):
+                    companies1_list = [str(c).lower().strip() for c in company1 if c]
+                elif isinstance(company1, str):
+                    companies1_list = [company1.lower().strip()]
+            
+            if company2:
+                if isinstance(company2, list):
+                    companies2_list = [str(c).lower().strip() for c in company2 if c]
+                elif isinstance(company2, str):
+                    companies2_list = [company2.lower().strip()]
+            
+            # Check if there are any common company names
+            if companies1_list and companies2_list:
+                common_companies = set(companies1_list) & set(companies2_list)
+                if not common_companies:
+                    # No common company names found
+                    companies1_str = ', '.join([c.split('\n')[0] for c in companies1_list])  # Get just the name part
+                    companies2_str = ', '.join([c.split('\n')[0] for c in companies2_list])
+                    warning_message = f"Warning: Different company names were detected (Image 1: '{companies1_str}' and Image 2: '{companies2_str}'). It's possible you have uploaded cards for two different companies, not the front and back side of the same card. So you may have to extract the information from both the cards combined and the information given is not correct."
             
             # Merge data from both images
-            extracted_data = merge_extracted_data(data1, data2)
+            extracted_data = merge_extracted_data(image1, image2)
         else:
             extracted_data = extract_information(image_paths)
         

@@ -20,7 +20,7 @@
                         <input type="file" id="imageInput" name="images" accept="image/*" multiple>
                         <label for="imageInput" class="file-label">
                             <span class="upload-text">Choose Images (Max 2)</span>
-                            <span class="file-info">PNG, JPG, JPEG, GIF, WEBP</span>
+                            <span class="file-info">PNG, JPG, JPEG, WEBP, HEIC</span>
                         </label>
                     </div>
                     <div id="previewContainer" class="preview-container"></div>
@@ -54,6 +54,7 @@
         </main>
     </div>
 
+    <script src="https://unpkg.com/heic2any@0.0.4/dist/heic2any.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

@@ -35,17 +35,57 @@ function displayPreviews() {
     previewContainer.innerHTML = '';
     
     selectedFiles.forEach((file, index) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const previewItem = document.createElement('div');
-            previewItem.className = 'preview-item';
-            previewItem.innerHTML = `
-                <img src="${e.target.result}" alt="Preview ${index + 1}">
-                <button type="button" class="remove-btn" onclick="removeFile(${index})">×</button>
-            `;
-            previewContainer.appendChild(previewItem);
-        };
-        reader.readAsDataURL(file);
+        const fileExtension = file.name.split('.').pop().toLowerCase();
+        const isHeic = fileExtension === 'heic' || fileExtension === 'heif';
+        
+        if (isHeic && typeof heic2any !== 'undefined') {
+            // Convert HEIC to JPEG for preview
+            heic2any({
+                blob: file,
+                toType: "image/jpeg",
+                quality: 0.8
+            }).then(conversionResult => {
+                // heic2any returns an array, get the first blob
+                const blob = Array.isArray(conversionResult) ? conversionResult[0] : conversionResult;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const previewItem = document.createElement('div');
+                    previewItem.className = 'preview-item';
+                    previewItem.innerHTML = `
+                        <img src="${e.target.result}" alt="Preview ${index + 1}">
+                        <button type="button" class="remove-btn" onclick="removeFile(${index})">×</button>
+                    `;
+                    previewContainer.appendChild(previewItem);
+                };
+                reader.readAsDataURL(blob);
+            }).catch(error => {
+                console.error('Error converting HEIC image:', error);
+                // Fallback: show placeholder or error message
+                const previewItem = document.createElement('div');
+                previewItem.className = 'preview-item';
+                previewItem.innerHTML = `
+                    <div style="padding: 20px; text-align: center; background: #f0f0f0;">
+                        <p>HEIC Preview</p>
+                        <p style="font-size: 12px; color: #666;">${file.name}</p>
+                    </div>
+                    <button type="button" class="remove-btn" onclick="removeFile(${index})">×</button>
+                `;
+                previewContainer.appendChild(previewItem);
+            });
+        } else {
+            // Handle regular image formats
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const previewItem = document.createElement('div');
+                previewItem.className = 'preview-item';
+                previewItem.innerHTML = `
+                    <img src="${e.target.result}" alt="Preview ${index + 1}">
+                    <button type="button" class="remove-btn" onclick="removeFile(${index})">×</button>
+                `;
+                previewContainer.appendChild(previewItem);
+            };
+            reader.readAsDataURL(file);
+        }
     });
 }
 
@@ -205,11 +245,41 @@ function displayResults(data) {
     
     // Add each field
     if (data.company_name) {
-        resultContent.appendChild(createInfoGroup('Company Name', data.company_name));
+        // Handle company_name as array or string (for backward compatibility)
+        let companyNames = [];
+        if (Array.isArray(data.company_name)) {
+            companyNames = data.company_name;
+        } else if (typeof data.company_name === 'string') {
+            companyNames = [data.company_name];
+        }
+        
+        if (companyNames.length > 0) {
+            // If multiple company names, display as list, otherwise as single value
+            if (companyNames.length === 1) {
+                resultContent.appendChild(createInfoGroup('Company Name', companyNames[0]));
+            } else {
+                resultContent.appendChild(createInfoGroup('Company Names', companyNames));
+            }
+        }
     }
     
     if (data.person_name) {
-        resultContent.appendChild(createInfoGroup('Person Name', data.person_name));
+        // Handle person_name as array or string (for backward compatibility)
+        let personNames = [];
+        if (Array.isArray(data.person_name)) {
+            personNames = data.person_name;
+        } else if (typeof data.person_name === 'string') {
+            personNames = [data.person_name];
+        }
+        
+        if (personNames.length > 0) {
+            // If multiple person names, display as list, otherwise as single value
+            if (personNames.length === 1) {
+                resultContent.appendChild(createInfoGroup('Person Name', personNames[0]));
+            } else {
+                resultContent.appendChild(createInfoGroup('Person Names', personNames));
+            }
+        }
     }
     
     if (data.category) {
