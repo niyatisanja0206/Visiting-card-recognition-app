@@ -1,0 +1,16 @@
+[project]
+name = "ocr-visiting-card"
+version = "1.0.0"
+description = "OCR application for extracting information from visiting card images"
+requires-python = ">=3.8"
+dependencies = [
+    "google-genai",
+    "Pillow",
+    "python-dotenv",
+    "requests",
+    "Flask",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

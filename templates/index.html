@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR - Visiting Card Information Extractor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Visiting Card OCR</h1>
+            <p>Upload visiting card images to extract information</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="imageInput" name="images" accept="image/*" multiple>
+                        <label for="imageInput" class="file-label">
+                            <span class="upload-text">Choose Images (Max 2)</span>
+                            <span class="file-info">PNG, JPG, JPEG, GIF, WEBP</span>
+                        </label>
+                    </div>
+                    <div id="previewContainer" class="preview-container"></div>
+                    <button type="submit" id="submitBtn" class="submit-btn" disabled>
+                        <span class="btn-text">Extract Information</span>
+                        <span class="btn-loader" style="display: none;">⏳ Processing...</span>
+                    </button>
+                </form>
+            </div>
+
+            <div id="warningSection" class="warning-section" style="display: none;">
+                <div class="warning-message">
+                    <span id="warningText"></span>
+                </div>
+            </div>
+
+            <div id="resultSection" class="result-section" style="display: none;">
+                <div class="result-header">
+                    <h2>Extracted Information</h2>
+                    <button id="downloadJsonBtn" class="download-btn">Download JSON</button>
+                </div>
+                <div id="resultContent" class="result-content"></div>
+                <button id="clearBtn" class="clear-btn">Clear Results</button>
+            </div>
+
+            <div id="errorSection" class="error-section" style="display: none;">
+                <div class="error-message">
+                    <span id="errorText"></span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
