@@ -14,13 +14,9 @@ genai.configure(api_key=api_key)
 
 MODEL_NAME = 'gemini-2.5-flash'  
 
-# Initialize the model
-model = genai.GenerativeModel(MODEL_NAME)
+model = genai.GenerativeModel(
+    MODEL_NAME
+)
 
 def get_model():
-    """
-    Get the configured Gemini model instance.
-    Returns:
-        GenerativeModel: Configured Gemini model instance
-    """
     return model
