@@ -1,82 +1,173 @@
-from flask import Flask
+"""Flask app for visiting card OCR and data extraction"""
+
+from flask import Flask, request, jsonify
 import os
+import boto3
+from PIL import Image
+from io import BytesIO
+import json
+from datetime import datetime
 import pillow_heif
+
 from extract_info import extract_information
 from merge_info import merge_extracted_data
 from llm_utils import get_model
 from prompt import get_prompt
-from pathlib import Path
-from PIL import Image
-from flask import request, jsonify
-from werkzeug.utils import secure_filename
-from flask import render_template
-from datetime import datetime
+from utils import has_content
 
 pillow_heif.register_heif_opener()
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.config['UPLOAD_FOLDER'] = 'upload_image'
 
-# Create uploads directory if it doesn't exist
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+# ===== AWS S3 Configuration =====
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_REGION = os.getenv('AWS_REGION')
+S3_BUCKET = os.getenv('S3_BUCKET_NAME')
 
-# Allowed file extensions
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'heic'}
+S3_CLIENT = boto3.client(
+    's3',
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
 
-def allowed_file(filename):
-    # Check if the file extension is allowed
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+if not S3_BUCKET:
+    raise ValueError("S3_BUCKET_NAME environment variable is required")
 
-def take_image_input(image1, image2=None):
-    # Take image input from the user
-    image_paths = []
-    if image1:
-        image_paths.append(image1)
-    if image2:
-        image_paths.append(image2)
-    return image_paths
+
+# ===== S3 OPERATIONS =====
+
+def download_image_from_s3(s3_url):
+    """
+    Download image from S3 URL and return PIL Image object.
     
-def validate_image_paths(image_paths):
-    # Validate the image paths
-    for img_path in image_paths:
-        path = Path(img_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Image file not found: {img_path}")
-        if not path.is_file():
-            raise ValueError(f"Path is not a file: {img_path}")
-    return image_paths
+    Args:
+        s3_url: S3 URL (https://s3.amazonaws.com/bucket/key or https://bucket.s3.amazonaws.com/key)
+    
+    Returns:
+        Tuple of (PIL Image object, bucket name, object key)
+    
+    Raises:
+        ValueError: If URL is invalid or download fails
+    """
+    try:
+        if "amazonaws.com" not in s3_url:
+            raise ValueError(f"Invalid S3 URL: {s3_url}")
+        
+        # Extract bucket and key from URL
+        if s3_url.startswith("https://s3"):
+            # Format: https://s3.amazonaws.com/bucket-name/key
+            parts = s3_url.replace("https://s3.amazonaws.com/", "").split("/", 1)
+            bucket = parts[0]
+            key = parts[1]
+        else:
+            # Format: https://bucket-name.s3.amazonaws.com/key
+            parts = s3_url.replace("https://", "").split(".s3.amazonaws.com/")
+            bucket = parts[0]
+            key = parts[1]
+        
+        # Get image from S3
+        response = S3_CLIENT.get_object(Bucket=bucket, Key=key)
+        image_data = response['Body'].read()
+        image = Image.open(BytesIO(image_data))
+        
+        return image, bucket, key
+    
+    except Exception as e:
+        raise ValueError(f"Failed to download image from S3: {str(e)}")
+
+
+def upload_data_to_s3(data, bucket, key_prefix, data_type="extraction"):
+    """
+    Upload extracted data to S3 as JSON.
+    
+    Args:
+        data: Data to upload (dict)
+        bucket: S3 bucket name
+        key_prefix: S3 key prefix (directory)
+        data_type: Type of data being uploaded (for filename)
+    
+    Returns:
+        S3 key where data was uploaded
+    
+    Raises:
+        ValueError: If upload fails
+    """
+    try:
+        # Generate S3 key for the data file
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        data_key = f"{key_prefix}/{data_type}_{timestamp}.json"
+        
+        # Convert data to JSON
+        json_data = json.dumps(data, indent=2)
+        
+        # Upload to S3
+        S3_CLIENT.put_object(
+            Bucket=bucket,
+            Key=data_key,
+            Body=json_data.encode('utf-8'),
+            ContentType='application/json'
+        )
+        
+        return data_key
+    
+    except Exception as e:
+        raise ValueError(f"Failed to upload data to S3: {str(e)}")
+
+
+# ===== LLM OPERATIONS =====
 
 def load_llm_prompt():
-    # Load the LLM model and prompt
+    """Load the LLM model and prompt."""
     model = get_model()
     prompt = get_prompt()
     return model, prompt
 
-def generate_response(image_paths):
-    # Call LLM API with images and prompt to get response text
-    # Validate image paths
-    validate_image_paths(image_paths)
+
+def generate_response(images):
+    """
+    Call LLM API with images and prompt to get response text.
     
-    # Load images
-    images = []
-    for img_path in image_paths:
-        images.append(Image.open(img_path))
+    Args:
+        images: List of PIL Image objects
     
-    # Get model and prompt
-    model, prompt = load_llm_prompt()
+    Returns:
+        Response text from LLM
     
-    # Prepare content for model
-    content = [prompt] + images
+    Raises:
+        ValueError: If LLM call fails
+    """
+    try:
+        # Get model and prompt
+        model, prompt = load_llm_prompt()
+        
+        # Prepare content for model
+        content = [prompt] + images
+        
+        # Call LLM API
+        response = model.generate_content(content)
+        response_text = response.text.strip()
+        
+        return response_text
     
-    # Call LLM API
-    response = model.generate_content(content)
-    response_text = response.text.strip()
-    
-    return response_text
+    except Exception as e:
+        raise ValueError(f"Failed to generate response from LLM: {str(e)}")
+
+
+# ===== DATA VALIDATION =====
 
 def is_empty_extraction(extracted_data):
-    # Check if extracted data contains no meaningful visiting card information
+    """
+    Check if extracted data contains no meaningful visiting card information.
+    
+    Args:
+        extracted_data: Extracted data dict
+    
+    Returns:
+        True if no content found, False otherwise
+    """
     # Key fields that indicate a visiting card
     key_fields = [
         'company_name',
@@ -89,164 +180,208 @@ def is_empty_extraction(extracted_data):
         'category'
     ]
     
-    # Check if all key fields are None or empty
+    # Check if any key field has content
     for field in key_fields:
-        value = extracted_data.get(field)
-        if value is not None:
-            # Check if it's a list/array with non-empty items
-            if isinstance(value, list):
-                if any(item for item in value if item):
-                    return False
-            # Check if it's a string with content
-            elif isinstance(value, str) and value.strip():
-                return False
-            # Check if it's a dict (like social_media_profiles)
-            elif isinstance(value, dict):
-                if any(v for v in value.values() if v):
-                    return False
+        if has_content(extracted_data.get(field)):
+            return False
     
-    # Also check social_media_profiles separately
-    social_media = extracted_data.get('social_media_profiles', {}) or {}
-    if social_media:
-        for platform, profiles in social_media.items():
-            if profiles:
-                if isinstance(profiles, list) and any(p for p in profiles if p):
-                    return False
-                elif isinstance(profiles, str) and profiles.strip():
-                    return False
+    # Check social media profiles
+    social_media = extracted_data.get('social_media_profiles', {})
+    if has_content(social_media):
+        return False
     
-    # If all key fields are empty, it's likely not a visiting card
+    # If all fields are empty, it's not a visiting card
     return True
 
-def process_images(image_paths):
-    # Process one or two images to extract and merge information
-    if len(image_paths) == 2:
-        # Extract information from both images separately
-        response_text1 = generate_response([image_paths[0]])
-        response_text2 = generate_response([image_paths[1]])
-        
-        data_image1 = extract_information(response_text1)
-        data_image2 = extract_information(response_text2)
-        
-        # Merge information from both images
-        merged_data = merge_extracted_data(data_image1, data_image2)
-        return merged_data
-    elif len(image_paths) == 1:
-        # Extract information from single image
-        response_text = generate_response(image_paths)
-        return extract_information(response_text)
-    else:
-        raise ValueError("Invalid number of images. Expected 1 or 2 images.")
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
+# ===== IMAGE PROCESSING =====
+
+def process_images(image_urls):
+    """
+    Process one or two images from S3 URLs to extract and merge information.
+    
+    Args:
+        image_urls: List of 1-2 S3 URLs
+    
+    Returns:
+        Tuple of (extracted data dict, S3 bucket, S3 key)
+    
+    Raises:
+        ValueError: If processing fails
+    """
     try:
-        # Check if files were uploaded
-        if 'images' not in request.files:
-            return jsonify({'error': 'No files uploaded'}), 400
+        images = []
+        s3_buckets = []
+        s3_keys = []
         
-        files = request.files.getlist('images')
+        # Download images from S3
+        for url in image_urls:
+            image, bucket, key = download_image_from_s3(url)
+            images.append(image)
+            s3_buckets.append(bucket)
+            s3_keys.append(key)
         
-        # Filter out empty files
-        files = [f for f in files if f.filename != '']
+        if len(images) == 2:
+            # Extract information from both images separately
+            response_text1 = generate_response([images[0]])
+            response_text2 = generate_response([images[1]])
+            
+            data_image1 = extract_information(response_text1)
+            data_image2 = extract_information(response_text2)
+            
+            # Merge information from both images
+            merged_data = merge_extracted_data(data_image1, data_image2)
+            
+            return merged_data, s3_buckets[0], s3_keys[0]
         
-        if not files:
-            return jsonify({'error': 'No files selected'}), 400
+        elif len(images) == 1:
+            # Extract information from single image
+            response_text = generate_response(images)
+            extracted_data = extract_information(response_text)
+            
+            return extracted_data, s3_buckets[0], s3_keys[0]
         
-        # Validate number of files
-        if len(files) > 2:
+        else:
+            raise ValueError("Invalid number of images. Expected 1 or 2 images.")
+    
+    except Exception as e:
+        raise ValueError(f"Failed to process images: {str(e)}")
+
+
+# ===== API ENDPOINTS =====
+
+@app.route('/info', methods=['POST'])
+def extract_info():
+    """
+    Extract information from visiting card images.
+    
+    Request body:
+    {
+        "image_urls": ["https://s3.amazonaws.com/bucket/image1.jpg"],
+        "upload_results": true  # Optional: whether to upload results to S3
+    }
+    
+    Response:
+    {
+        "success": true,
+        "data": { ... },
+        "s3_result_key": "...",
+        "warning": "..." # Optional
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Request body must be JSON'}), 400
+        
+        image_urls = data.get('image_urls')
+        upload_results = data.get('upload_results', True)
+        
+        # Validate image URLs
+        if not image_urls:
+            return jsonify({'error': 'image_urls field is required'}), 400
+        
+        if not isinstance(image_urls, list):
+            return jsonify({'error': 'image_urls must be an array'}), 400
+        
+        if len(image_urls) > 2:
             return jsonify({'error': 'Maximum 2 images are supported'}), 400
         
-        # Validate and save files
-        image_paths = []
-        for file in files:
-            if not allowed_file(file.filename):
-                return jsonify({'error': f'Invalid file type: {file.filename}. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
-            
-            # Add timestamp to filename to prevent overwriting
-            original_filename = secure_filename(file.filename)
-            name, ext = os.path.splitext(original_filename)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            filename = f"{name}_{timestamp}{ext}"
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            image_paths.append(filepath)
+        if len(image_urls) == 0:
+            return jsonify({'error': 'At least 1 image URL is required'}), 400
         
-        # Process images - extract and merge information from both images if provided
+        # Process images
+        extracted_data, bucket, key = process_images(image_urls)
+        
+        # Check if no information was extracted
         warning_message = None
-        
-        # If two images, extract separately first to compare company names
-        if len(image_paths) == 2:
-            from extract_info import extract_information
-            from merge_info import merge_extracted_data
-            
-            # Extract information from both images separately
-            response_text1 = generate_response([image_paths[0]])
-            response_text2 = generate_response([image_paths[1]])
-            
-            image1 = extract_information(response_text1)
-            image2 = extract_information(response_text2)
-            
-            # Compare company names
-            company1 = image1.get('company_name')
-            company2 = image2.get('company_name')
-            
-            # Normalize to lists for comparison
-            companies1_list = []
-            companies2_list = []
-            
-            if company1:
-                if isinstance(company1, list):
-                    companies1_list = [str(c).lower().strip() for c in company1 if c]
-                elif isinstance(company1, str):
-                    companies1_list = [company1.lower().strip()]
-            
-            if company2:
-                if isinstance(company2, list):
-                    companies2_list = [str(c).lower().strip() for c in company2 if c]
-                elif isinstance(company2, str):
-                    companies2_list = [company2.lower().strip()]
-            
-            # Check if there are any common company names
-            if companies1_list and companies2_list:
-                common_companies = set(companies1_list) & set(companies2_list)
-                if not common_companies:
-                    # No common company names found
-                    companies1_str = ', '.join([c.split('\n')[0] for c in companies1_list])  # Get just the name part
-                    companies2_str = ', '.join([c.split('\n')[0] for c in companies2_list])
-                    warning_message = f"Warning: Different company names were detected (Image 1: '{companies1_str}' and Image 2: '{companies2_str}'). It's possible you have uploaded cards for two different companies, not the front and back side of the same card. So you may have to extract the information from both the cards combined and the information given is not correct."
-            
-            # Merge data from both images
-            extracted_data = merge_extracted_data(image1, image2)
-        else:
-            # Process single image
-            extracted_data = process_images(image_paths)
-        
-        # Check if no information was extracted (image might not be a visiting card)
         if is_empty_extraction(extracted_data):
-            empty_warning = "Warning: No visiting card information was extracted from the image(s). The uploaded image(s) may not be a visiting card."
-            if warning_message:
-                warning_message = f"{warning_message} Additionally, {empty_warning}"
-            else:
-                warning_message = empty_warning
+            warning_message = "Warning: No visiting card information was extracted from the image(s). The uploaded image(s) may not be a visiting card."
         
-        # Images are stored in upload_image folder and not deleted
+        # Upload results to S3 if requested
+        result_key = None
+        if upload_results:
+            try:
+                # Get the directory from the image key
+                key_prefix = '/'.join(key.split('/')[:-1]) if '/' in key else ''
+                result_key = upload_data_to_s3(extracted_data, bucket, key_prefix, "extraction_result")
+            except Exception as e:
+                warning_message = f"{warning_message or 'Extraction successful.'} However, failed to upload results to S3: {str(e)}"
+        
         response = {
             'success': True,
-            'data': extracted_data
+            'data': extracted_data,
+            's3_result_key': result_key
         }
         
         if warning_message:
             response['warning'] = warning_message
         
-        return jsonify(response)
+        return jsonify(response), 200
     
-    except FileNotFoundError as e:
-        return jsonify({'error': str(e)}), 404
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+
+
+@app.route('/info/<extraction_id>', methods=['GET'])
+def get_info(extraction_id):
+    """
+    Retrieve previously extracted and stored information from S3.
+    
+    Args:
+        extraction_id: The S3 key or identifier of the stored extraction result
+    
+    Query params:
+        bucket: S3 bucket name (optional, defaults to configured bucket)
+    
+    Response:
+    {
+        "success": true,
+        "data": { ... },
+        "s3_key": "..."
+    }
+    """
+    try:
+        bucket = request.args.get('bucket', S3_BUCKET)
+        
+        if not bucket:
+            return jsonify({'error': 'Bucket not specified and S3_BUCKET_NAME not configured'}), 400
+        
+        # Download the extraction result from S3
+        try:
+            response = S3_CLIENT.get_object(Bucket=bucket, Key=extraction_id)
+            json_data = response['Body'].read().decode('utf-8')
+            extracted_data = json.loads(json_data)
+            
+            return jsonify({
+                'success': True,
+                'data': extracted_data,
+                's3_key': extraction_id
+            }), 200
+        
+        except S3_CLIENT.exceptions.NoSuchKey:
+            return jsonify({'error': f'Extraction result not found: {extraction_id}'}), 404
+        except Exception as e:
+            return jsonify({'error': f'Failed to retrieve extraction result: {str(e)}'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint to verify S3 connection."""
+    try:
+        # Verify S3 connection
+        S3_CLIENT.head_bucket(Bucket=S3_BUCKET)
+        return jsonify({'status': 'healthy', 'bucket': S3_BUCKET}), 200
+    
+    except Exception as e:
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-
