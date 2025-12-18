@@ -1,9 +1,6 @@
-"""Extract and normalize information from LLM response"""
-
 import json
 import sys
-from utils import normalize_field, normalize_social_media
-
+from info_utils import normalize_field, normalize_social_media
 
 def extract_information(response_text):
     """

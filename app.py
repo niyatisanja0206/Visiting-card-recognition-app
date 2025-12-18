@@ -13,14 +13,14 @@ from extract_info import extract_information
 from merge_info import merge_extracted_data
 from llm_utils import get_model
 from prompt import get_prompt
-from utils import has_content
+from info_utils import has_content
 
 pillow_heif.register_heif_opener()
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
-# ===== AWS S3 Configuration =====
+# AWS S3 Configuration
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_REGION = os.getenv('AWS_REGION')
@@ -37,8 +37,7 @@ if not S3_BUCKET:
     raise ValueError("S3_BUCKET_NAME environment variable is required")
 
 
-# ===== S3 OPERATIONS =====
-
+# S3 Operations
 def download_image_from_s3(s3_url):
     """
     Download image from S3 URL and return PIL Image object.
@@ -117,7 +116,7 @@ def upload_data_to_s3(data, bucket, key_prefix, data_type="extraction"):
         raise ValueError(f"Failed to upload data to S3: {str(e)}")
 
 
-# ===== LLM OPERATIONS =====
+# LLM OPERATIONS
 
 def load_llm_prompt():
     """Load the LLM model and prompt."""
@@ -156,7 +155,7 @@ def generate_response(images):
         raise ValueError(f"Failed to generate response from LLM: {str(e)}")
 
 
-# ===== DATA VALIDATION =====
+# DATA VALIDATION
 
 def is_empty_extraction(extracted_data):
     """
@@ -194,7 +193,7 @@ def is_empty_extraction(extracted_data):
     return True
 
 
-# ===== IMAGE PROCESSING =====
+# IMAGE PROCESSING
 
 def process_images(image_urls):
     """
@@ -248,8 +247,7 @@ def process_images(image_urls):
         raise ValueError(f"Failed to process images: {str(e)}")
 
 
-# ===== API ENDPOINTS =====
-
+# API ENDPOINTS
 @app.route('/info', methods=['POST'])
 def extract_info():
     """
@@ -257,7 +255,7 @@ def extract_info():
     
     Request body:
     {
-        "image_urls": ["https://s3.amazonaws.com/bucket/image1.jpg"],
+        "image_urls": ["https://s3.amazonaws.com/bucket/eventid/infoid/image.jpg"],
         "upload_results": true  # Optional: whether to upload results to S3
     }
     
@@ -293,6 +291,16 @@ def extract_info():
         
         # Process images
         extracted_data, bucket, key = process_images(image_urls)
+
+        # Extract event_id and info_id from the key if possible and add to extracted data
+        # Expected key format: eventid/infoid/filename.ext or similar structure where IDs are in the path
+        if key:
+            parts = key.split('/')
+            # Assuming structure is .../event_id/info_id/filename
+            if len(parts) >= 2:
+                extracted_data['info_id'] = parts[-2]
+            if len(parts) >= 3:
+                extracted_data['event_id'] = parts[-3]
         
         # Check if no information was extracted
         warning_message = None
@@ -324,7 +332,6 @@ def extract_info():
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': f'Internal server error: {str(e)}'}), 500
-
 
 @app.route('/info/<extraction_id>', methods=['GET'])
 def get_info(extraction_id):
@@ -369,7 +376,6 @@ def get_info(extraction_id):
     
     except Exception as e:
         return jsonify({'error': f'Internal server error: {str(e)}'}), 500
-
 
 @app.route('/health', methods=['GET'])
 def health_check():

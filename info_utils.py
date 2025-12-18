@@ -1,6 +1,3 @@
-"""Utility functions for data normalization and deduplication"""
-
-
 def normalize_field(value, return_type='list'):
     """
     Normalize field values to consistent format.

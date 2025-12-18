@@ -1,0 +1,7 @@
+google-genai
+Pillow
+python-dotenv
+requests
+Flask
+boto3
+pillow_heif
