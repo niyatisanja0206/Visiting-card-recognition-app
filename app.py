@@ -138,10 +138,6 @@ def process_images(image_paths):
     else:
         raise ValueError("Invalid number of images. Expected 1 or 2 images.")
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
 @app.route('/upload', methods=['POST'])
 def upload_file():
     try:
