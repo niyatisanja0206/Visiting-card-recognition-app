@@ -17,8 +17,7 @@ STRICT RULES (MANDATORY):
 OUTPUT JSON STRUCTURE (EXACT):
 {
   "company_name": ["Company Name\\nQuote or Subtitle1", "Company Name\\nQuote or Subtitle2"] or "Company Name\\nQuote or Subtitle1" or "Company Name\\nQuote or Subtitle2" or null,
-  "company_quote": null,
-  "person_name": ["Person Name 1", "Person Name 2"] or "Person Name" or null,
+  "person_name": ["Person Name 1(position if mentioned)", "Person Name 2(position if mentioned)"] or "Person Name" or null,
   "contact_numbers": ["number1", "number2"] or null,
   "social_media_profiles": {
     "facebook": "URL or null",
@@ -37,8 +36,8 @@ OUTPUT JSON STRUCTURE (EXACT):
 
 EXTRACTION RULES:
 - company_name: Extract ONLY company names explicitly. Combine company name and its quote/tagline/subtitle using \\n. If there are multiple company names, return them as an array.
-- company_quote: Always return null.
 - contact_numbers, email_addresses, website, person_name, services: Extract ONLY contact numbers, email addresses, websites, person names, and services explicitly written as text. If there are multiple contact numbers or email addresses, return them as an array.
+- person_name: If position is mentioned, include it in the person name.
 - category: Return ONLY ONE category if clearly determinable from written content; otherwise null.
 - QR code URLs:
   • Website URLs → website

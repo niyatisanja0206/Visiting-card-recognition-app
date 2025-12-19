@@ -180,5 +180,5 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-./layer_one
-./layer_two
+# S3
+.s3

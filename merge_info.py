@@ -17,7 +17,6 @@ def merge_extracted_data(img_data_image1, img_data_image2):
     company1 = normalize_field(img_data_image1.get('company_name'), return_type='list')
     company2 = normalize_field(img_data_image2.get('company_name'), return_type='list')
     merged['company_name'] = merge_lists(company1, company2)
-    merged['company_quote'] = None  # Always None as per spec
     
     # MERGE PERSON NAMES
     person1 = normalize_field(img_data_image1.get('person_name'), return_type='list')

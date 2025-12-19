@@ -36,9 +36,6 @@ def extract_information(response_text):
                 return_type='list'
             )
         
-        # Handle company_quote (always set to None as per spec)
-        extracted_data['company_quote'] = None
-        
         # Normalize category to single string
         extracted_data['category'] = normalize_field(
             extracted_data.get('category'),
